@@ -22,6 +22,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/kakao_agent"]
+include = ["src/kakao_agent/mac_identity_probe.swift"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

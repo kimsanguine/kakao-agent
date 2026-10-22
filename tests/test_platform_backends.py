@@ -42,22 +42,24 @@ def test_macos_key_derivation_has_a_fixed_known_result():
     )
 
 
-def test_macos_recovers_every_matching_local_account_not_just_the_first():
-    backend = MacDatabaseBackend(runner=lambda *_args, **_kwargs: None)
-    backend.account_hashes = lambda: {
-        "3bafbf08882a2d10133093a1b8433f50563b93c14acd05b79028eb1d12799027"
-        "241450980651994501423a66c276ae26c43b739bc65c4e16b10c3af6c202aebb",
-        "f05210c5b4263f0ec4c3995bdab458d81d3953f354a9109520f159db1e8800bc"
-        "d45b97c56dce90a1fc27ab03e0b8a9af8673747023c406299374116d6f966981",
-    }
-    assert backend.recover_account_ids(upper_bound=10) == [3, 7]
+def test_macos_recovers_the_active_account_through_its_native_probe():
+    backend = MacDatabaseBackend(identity_probe=lambda: 42)
+    assert backend.recover_account_id() == 42
+    assert backend.recover_account_ids() == [42]
+
+
+def test_macos_database_name_has_the_expected_encrypted_filename_shape():
+    name = MacDatabaseBackend.database_name("12345678-1234-1234-1234-1234567890AB", 42)
+    assert len(name) == 78
+    assert name.isalnum()
 
 
 def test_macos_prepare_fails_if_no_candidate_database_opens():
-    backend = MacDatabaseBackend(runner=lambda *_args, **_kwargs: None)
-    backend.recover_account_ids = lambda _upper_bound: [3]
+    backend = MacDatabaseBackend(
+        runner=lambda *_args, **_kwargs: None, account_ids=(3,)
+    )
     backend.device_uuid = lambda: "12345678-1234-1234-1234-1234567890AB"
-    backend.candidates = lambda: [Path("candidate")]
+    backend.database_path = lambda _account_id: Path("candidate")
     backend._connect = lambda _path, _key: (_ for _ in ()).throw(
         CollectionError("closed")
     )
@@ -66,14 +68,15 @@ def test_macos_prepare_fails_if_no_candidate_database_opens():
 
 
 def test_macos_prepare_saves_all_recovered_accounts_only_after_read_only_open():
-    backend = MacDatabaseBackend(runner=lambda *_args, **_kwargs: None)
-    backend.recover_account_ids = lambda _upper_bound: [3, 7]
+    backend = MacDatabaseBackend(
+        runner=lambda *_args, **_kwargs: None, account_ids=(3, 7)
+    )
     backend.device_uuid = lambda: "12345678-1234-1234-1234-1234567890AB"
-    backend.candidates = lambda: [Path("candidate")]
+    backend.database_path = lambda _account_id: Path("candidate")
     connection = sqlite3.connect(":memory:")
     backend._connect = lambda _path, _key: connection
-    assert backend.prepare() == (3, 7)
-    assert backend.account_ids == (3, 7)
+    assert backend.prepare() == (3,)
+    assert backend.account_ids == (3,)
 
 
 def test_macos_room_discovery_reads_only_room_id_and_title():
@@ -82,6 +85,13 @@ def test_macos_room_discovery_reads_only_room_id_and_title():
         "CREATE TABLE chat_rooms (chat_id INTEGER, title TEXT, hidden TEXT)"
     )
     connection.execute("INSERT INTO chat_rooms VALUES (123, '프로젝트', 'private')")
+    assert MacDatabaseBackend._room_query(connection) == [(123, "프로젝트")]
+
+
+def test_macos_room_discovery_supports_the_current_camel_case_room_title_column():
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE NTChatRoom (chatId INTEGER, chatName TEXT)")
+    connection.execute("INSERT INTO NTChatRoom VALUES (123, '프로젝트')")
     assert MacDatabaseBackend._room_query(connection) == [(123, "프로젝트")]
 
 

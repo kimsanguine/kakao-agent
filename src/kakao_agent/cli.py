@@ -36,10 +36,7 @@ def main():
         "doctor", help="설정과 로컬 backend만 점검. 카카오톡 원문은 읽지 않음"
     )
     subs.add_parser("serve")
-    prepare = subs.add_parser(
-        "prepare", help="Mac 로컬 DB 읽기 준비. 대화 원문은 읽지 않음"
-    )
-    prepare.add_argument("--account-upper-bound", type=int, default=1_000_000)
+    subs.add_parser("prepare", help="Mac 로컬 DB 읽기 준비. 대화 원문은 읽지 않음")
     read = subs.add_parser("read", help="허용한 방의 로컬 기록을 읽기")
     read.add_argument("room")
     args = parser.parse_args()
@@ -60,7 +57,7 @@ def main():
         if args.action == "prepare":
             if backend.kind != "macos-local-db":
                 raise ValueError("Mac에서만 로컬 DB 준비를 실행할 수 있습니다.")
-            account_ids = backend.prepare(args.account_upper_bound)
+            account_ids = backend.prepare()
             raw["mac_account_ids"] = list(account_ids)
             save(args.config, raw)
             print(
