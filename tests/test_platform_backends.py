@@ -25,6 +25,10 @@ def test_backend_factory_selects_the_native_windows_visible_window_reader():
     assert backend.kind == "windows-visible-ui"
 
 
+def test_windows_factory_ignores_mac_only_private_account_value():
+    assert isinstance(create_backend(system="Windows", account_id=42), WindowsUiBackend)
+
+
 def test_macos_key_derivation_has_a_fixed_known_result():
     backend = MacDatabaseBackend(runner=lambda *_args, **_kwargs: None)
     assert backend.derive_key("12345678-1234-1234-1234-1234567890AB", 42) == (

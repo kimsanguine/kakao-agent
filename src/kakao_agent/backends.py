@@ -379,6 +379,7 @@ def create_backend(system=None, **kwargs):
     if selected == "Darwin":
         return MacDatabaseBackend(**kwargs)
     if selected == "Windows":
+        kwargs.pop("account_id", None)
         return WindowsUiBackend(**kwargs)
     raise CollectionError(
         "macOS 또는 Windows에서만 카카오톡 로컬 기록을 읽을 수 있습니다."
