@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import platform
+import plistlib
 import re
 import subprocess
 from datetime import datetime, timezone
@@ -191,109 +192,144 @@ class MacDatabaseBackend:
 
     @classmethod
     def _message_query(cls, connection, chat_id):
-        tables = [
-            row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
-        ]
-        for table in tables:
-            if "chat" not in table.lower():
-                continue
-            quoted_table = cls._quote_identifier(table)
-            columns = {
-                row[1].lower(): row[1]
-                for row in connection.execute(f"PRAGMA table_info({quoted_table})")
-            }
-            room_column = next(
-                (
-                    columns[name]
-                    for name in ("chat_id", "chatid", "room_id")
-                    if name in columns
-                ),
-                None,
-            )
-            text_column = next(
-                (
-                    columns[name]
-                    for name in ("message", "text", "contents", "content")
-                    if name in columns
-                ),
-                None,
-            )
-            time_column = next(
-                (
-                    columns[name]
-                    for name in (
-                        "created_at",
-                        "createdat",
-                        "sent_at",
-                        "sentat",
-                        "timestamp",
-                        "time",
-                    )
-                    if name in columns
-                ),
-                None,
-            )
-            if not room_column or not text_column:
-                continue
-            selected_time = (
-                cls._quote_identifier(time_column) if time_column else "NULL"
-            )
-            rows = connection.execute(
-                f"SELECT {selected_time}, {cls._quote_identifier(text_column)} "
-                f"FROM {quoted_table} WHERE {cls._quote_identifier(room_column)} = ? "
-                "ORDER BY rowid DESC LIMIT 500",
-                (str(chat_id),),
-            ).fetchall()
-            if rows:
-                return list(reversed(rows))
-        raise CollectionError("선택한 방의 텍스트 기록을 찾지 못했습니다.")
+        columns = cls._table_columns(connection, "NTChatMessage")
+        required = {"chatid", "logid", "message", "sentat"}
+        if not required.issubset(columns):
+            raise CollectionError("카카오톡 메시지 기록 구조를 확인하지 못했습니다.")
+        rows = connection.execute(
+            "SELECT sentAt, message FROM NTChatMessage "
+            "WHERE chatId = ? ORDER BY sentAt DESC, logId DESC LIMIT 500",
+            (str(chat_id),),
+        ).fetchall()
+        if not rows:
+            raise CollectionError("선택한 방의 텍스트 기록을 찾지 못했습니다.")
+        return list(reversed(rows))
 
     @classmethod
     def _room_query(cls, connection):
-        tables = [
-            row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
+        room_columns = cls._table_columns(connection, "NTChatRoom")
+        if not {"chatid", "type", "lastupdatedat"}.issubset(room_columns):
+            raise CollectionError("카카오톡 방 목록 구조를 확인하지 못했습니다.")
+
+        user_columns = cls._table_columns(connection, "NTUser")
+        user_name_columns = [
+            name
+            for name in ("displayName", "friendNickName", "nickName")
+            if name.lower() in user_columns
         ]
-        for table in tables:
-            if "chat" not in table.lower():
-                continue
-            quoted_table = cls._quote_identifier(table)
-            columns = {
-                row[1].lower(): row[1]
-                for row in connection.execute(f"PRAGMA table_info({quoted_table})")
+        user_names = {}
+        if "userid" in user_columns and user_name_columns:
+            parts = ", ".join(f"NULLIF(\"{name}\", '')" for name in user_name_columns)
+            where = " WHERE linkId = 0" if "linkid" in user_columns else ""
+            user_names = {
+                int(user_id): str(name)
+                for user_id, name in connection.execute(
+                    f"SELECT userId, COALESCE({parts}) FROM NTUser{where}"
+                )
+                if name
             }
-            room_column = next(
-                (
-                    columns[name]
-                    for name in ("chat_id", "chatid", "room_id", "id")
-                    if name in columns
-                ),
-                None,
+
+        me = None
+        context_columns = cls._table_columns(connection, "NTChatContext")
+        if "userid" in context_columns:
+            row = connection.execute(
+                "SELECT userId FROM NTChatContext LIMIT 1"
+            ).fetchone()
+            me = int(row[0]) if row else None
+
+        meta_title = "NULL"
+        meta_columns = cls._table_columns(connection, "NTChatMeta")
+        if {"chatid", "type", "content"}.issubset(meta_columns):
+            order = "revision DESC" if "revision" in meta_columns else "rowid DESC"
+            meta_title = (
+                "(SELECT content FROM NTChatMeta "
+                f"WHERE chatId = r.chatId AND type = 3 ORDER BY {order} LIMIT 1)"
             )
-            title_column = next(
-                (
-                    columns[name]
-                    for name in ("title", "chat_name", "chatname", "name")
-                    if name in columns
-                ),
-                None,
+
+        joins = []
+        link_name = "NULL"
+        link_columns = cls._table_columns(connection, "NTOpenLink")
+        if "linkid" in room_columns and {"linkid", "linkname"}.issubset(link_columns):
+            joins.append("LEFT JOIN NTOpenLink ol ON ol.linkId = r.linkId")
+            link_name = "ol.linkName"
+
+        direct_name = "NULL"
+        if (
+            "directchatmemberuserid" in room_columns
+            and "userid" in user_columns
+            and user_name_columns
+        ):
+            direct_filter = " AND du.linkId = 0" if "linkid" in user_columns else ""
+            joins.append(
+                "LEFT JOIN NTUser du ON du.userId = r.directChatMemberUserId"
+                f"{direct_filter}"
             )
-            if room_column and title_column:
-                rows = connection.execute(
-                    f"SELECT {cls._quote_identifier(room_column)}, "
-                    f"{cls._quote_identifier(title_column)} FROM {quoted_table} "
-                    "WHERE "
-                    f"{cls._quote_identifier(title_column)} IS NOT NULL "
-                    "ORDER BY rowid DESC LIMIT 100"
-                ).fetchall()
-                if rows:
-                    return rows
-        raise CollectionError("연결할 카카오톡 방 목록을 찾지 못했습니다.")
+            parts = ", ".join(f"NULLIF(du.{name}, '')" for name in user_name_columns)
+            direct_name = f"COALESCE({parts})"
+
+        member_ids = "NULL"
+        if "displaymemberids" in room_columns:
+            member_ids = "r.displayMemberIds"
+        chat_name = "r.chatName" if "chatname" in room_columns else "NULL"
+        sql = f"""
+            SELECT r.chatId, r.type, {chat_name}, {meta_title}, {link_name},
+                   {direct_name}, {member_ids}
+            FROM NTChatRoom r
+            {" ".join(joins)}
+            WHERE r.chatId != -1
+            ORDER BY r.lastUpdatedAt DESC, r.chatId DESC
+        """
+        rows = connection.execute(sql).fetchall()
+        if not rows:
+            raise CollectionError("연결할 카카오톡 방 목록을 찾지 못했습니다.")
+        return [
+            (room_id, cls._room_title(*row, user_names=user_names, self_user_id=me))
+            for room_id, *row in rows
+        ]
+
+    @staticmethod
+    def _table_columns(connection, table):
+        exists = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+        ).fetchone()
+        if not exists:
+            return {}
+        return {
+            row[1].lower(): row[1]
+            for row in connection.execute(f"PRAGMA table_info({table})")
+        }
+
+    @staticmethod
+    def _room_title(
+        room_type,
+        chat_name,
+        meta_title,
+        link_name,
+        direct_name,
+        member_blob,
+        *,
+        user_names,
+        self_user_id,
+    ):
+        for candidate in (chat_name, meta_title, link_name, direct_name):
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+        if isinstance(member_blob, (bytes, bytearray)):
+            try:
+                members = plistlib.loads(member_blob)
+            except (TypeError, ValueError):
+                members = []
+            names = [
+                user_names.get(int(member))
+                for member in sorted(members)
+                if isinstance(member, int) and member != self_user_id
+            ]
+            names = [name for name in names if name]
+            if names:
+                return ", ".join(names)
+        if room_type == 5 and self_user_id in user_names:
+            return user_names[self_user_id]
+        return "(이름 없음)"
 
     @staticmethod
     def _connect(path, key):

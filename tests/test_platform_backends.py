@@ -79,20 +79,51 @@ def test_macos_prepare_saves_all_recovered_accounts_only_after_read_only_open():
     assert backend.account_ids == (3,)
 
 
-def test_macos_room_discovery_reads_only_room_id_and_title():
+def test_macos_room_discovery_uses_the_room_table_not_an_earlier_chat_table():
     connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE NTChatBotCommand (chatId INTEGER, chatName TEXT)")
     connection.execute(
-        "CREATE TABLE chat_rooms (chat_id INTEGER, title TEXT, hidden TEXT)"
+        "INSERT INTO NTChatBotCommand VALUES (1, '잘못 고른 보조 테이블')"
     )
-    connection.execute("INSERT INTO chat_rooms VALUES (123, '프로젝트', 'private')")
-    assert MacDatabaseBackend._room_query(connection) == [(123, "프로젝트")]
+    connection.execute(
+        "CREATE TABLE NTChatRoom (chatId INTEGER, type INTEGER, chatName TEXT, "
+        "lastUpdatedAt INTEGER, directChatMemberUserId INTEGER, linkId INTEGER, "
+        "displayMemberIds BLOB)"
+    )
+    connection.execute("CREATE TABLE NTOpenLink (linkId INTEGER, linkName TEXT)")
+    connection.execute(
+        "INSERT INTO NTChatRoom VALUES (123, 3, NULL, 20, NULL, 77, NULL)"
+    )
+    connection.execute(
+        "INSERT INTO NTOpenLink VALUES (77, 'AI반려 에이전트 오픈채팅방')"
+    )
+
+    assert MacDatabaseBackend._room_query(connection) == [
+        (123, "AI반려 에이전트 오픈채팅방")
+    ]
 
 
-def test_macos_room_discovery_supports_the_current_camel_case_room_title_column():
+def test_macos_message_query_reads_ntchatmessage_in_time_and_log_order():
     connection = sqlite3.connect(":memory:")
-    connection.execute("CREATE TABLE NTChatRoom (chatId INTEGER, chatName TEXT)")
-    connection.execute("INSERT INTO NTChatRoom VALUES (123, '프로젝트')")
-    assert MacDatabaseBackend._room_query(connection) == [(123, "프로젝트")]
+    connection.execute("CREATE TABLE chat_audit (chat_id INTEGER, message TEXT)")
+    connection.execute("INSERT INTO chat_audit VALUES (123, '보조 테이블 메시지')")
+    connection.execute(
+        "CREATE TABLE NTChatMessage (chatId INTEGER, logId INTEGER, message TEXT, sentAt INTEGER)"
+    )
+    connection.executemany(
+        "INSERT INTO NTChatMessage VALUES (?, ?, ?, ?)",
+        [
+            (123, 20, "두 번째", 100),
+            (123, 10, "첫 번째", 100),
+            (123, 30, "세 번째", 101),
+        ],
+    )
+
+    assert MacDatabaseBackend._message_query(connection, "123") == [
+        (100, "첫 번째"),
+        (100, "두 번째"),
+        (101, "세 번째"),
+    ]
 
 
 def test_windows_reader_refuses_an_ambiguous_window_match_without_copying():
