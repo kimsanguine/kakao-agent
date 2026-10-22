@@ -5,7 +5,10 @@ description = "Read-only KakaoTalk MCP and briefing collector with local room al
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
-dependencies = ["mcp>=2.2,<3"]
+dependencies = [
+    "mcp>=2.2,<3",
+    "sqlcipher3>=0.6 ; sys_platform == 'darwin'",
+]
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.12"]

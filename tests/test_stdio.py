@@ -1,17 +1,18 @@
 import asyncio
 import json
 import os
+import platform
 import sys
 
 from mcp import Client
 from mcp.client.stdio import StdioServerParameters
 
 
-def test_real_stdio_server_lists_only_read_tools_and_denies_before_clipboard(tmp_path):
+def test_real_stdio_server_lists_only_read_tools_and_denies_before_backend(tmp_path):
     config = tmp_path / "config.json"
     config.write_text(
         json.dumps(
-            {"mode": "clipboard", "rooms": {"업무": True}, "max_chars": 100_000},
+            {"mode": "native", "rooms": {"업무": "123"}, "max_chars": 100_000},
             ensure_ascii=False,
         ),
         encoding="utf-8",
@@ -33,6 +34,8 @@ def test_real_stdio_server_lists_only_read_tools_and_denies_before_clipboard(tmp
     assert {tool.name for tool in tools.tools} == {"kakao_rooms", "kakao_read"}
     assert json.loads(rooms.content[0].text) == {
         "rooms": ["업무"],
-        "source": "clipboard",
+        "source": (
+            "macos-local-db" if platform.system() == "Darwin" else "windows-visible-ui"
+        ),
     }
     assert denied.is_error

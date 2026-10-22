@@ -1,4 +1,4 @@
-"""개인 허용 목록만 저장한다. 카카오 DB·외부 MCP·OS 권한을 설정하지 않는다."""
+"""개인 허용 목록과 로컬 연결 대상만 저장한다."""
 
 import json
 import os
@@ -19,16 +19,23 @@ def default_path():
 
 
 def initial():
-    return {"mode": "clipboard", "rooms": {}, "max_chars": 100_000}
+    return {"mode": "native", "rooms": {}, "max_chars": 100_000}
 
 
 def load(path):
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(raw, dict) or set(raw) - {"mode", "rooms", "max_chars"}:
+    if not isinstance(raw, dict) or set(raw) - {
+        "mode",
+        "rooms",
+        "max_chars",
+        "mac_account_id",
+    }:
         raise ValueError("알 수 없는 설정 항목입니다.")
-    if raw.get("mode") != "clipboard":
+    if raw.get("mode") != "native":
         raise ValueError("지원하지 않는 입력 방식입니다.")
-    return raw, Settings(raw["rooms"], raw.get("max_chars", 100_000))
+    return raw, Settings(
+        raw["rooms"], raw.get("max_chars", 100_000), raw.get("mac_account_id")
+    )
 
 
 def save(path, raw, *, create=False):
