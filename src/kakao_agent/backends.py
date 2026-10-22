@@ -439,20 +439,96 @@ class WindowsUiBackend:
     @staticmethod
     def command(target):
         encoded_target = base64.b64encode(str(target).encode("utf-8")).decode()
-        script = f"""
-$ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
-$target = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_target}'))
-$windows = @(Get-Process KakaoTalk -ErrorAction Stop | Where-Object {{$_.MainWindowHandle -ne 0}} | ForEach-Object {{ [System.Windows.Automation.AutomationElement]::FromHandle($_.MainWindowHandle) }})
-$matches = @($windows | Where-Object {{$_.Current.Name -eq $target}})
-if ($matches.Count -eq 0) {{ @{{status='missing'}} | ConvertTo-Json -Compress; exit 0 }}
-if ($matches.Count -ne 1) {{ @{{status='ambiguous'}} | ConvertTo-Json -Compress; exit 0 }}
-$textNodes = $matches[0].FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
-$lines = @($textNodes | ForEach-Object {{ if ($_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Text -and $_.Current.Name) {{ $_.Current.Name }} }} | Select-Object -Unique)
-if ($lines.Count -eq 0) {{ @{{status='empty'}} | ConvertTo-Json -Compress; exit 0 }}
-@{{status='ok'; text=($lines -join [Environment]::NewLine); captured_at=[DateTime]::UtcNow.ToString('o')}} | ConvertTo-Json -Compress
+        script = (
+            "$ErrorActionPreference = 'Stop'\n"
+            "Add-Type -AssemblyName UIAutomationClient\n"
+            "Add-Type -AssemblyName UIAutomationTypes\n"
+            f"$target = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_target}'))\n"
+            r"""
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public sealed class KakaoWindowRecord
+{
+    public long Handle { get; set; }
+    public int ProcessId { get; set; }
+    public string Title { get; set; }
+    public string ClassName { get; set; }
+}
+
+public static class KakaoWindowReader
+{
+    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowTextLength(IntPtr hWnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int maxCount);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr hWnd, StringBuilder className, int maxCount);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+    public static KakaoWindowRecord[] VisibleTopLevelWindows()
+    {
+        var records = new List<KakaoWindowRecord>();
+        EnumWindows(delegate(IntPtr hWnd, IntPtr lParam)
+        {
+            if (!IsWindowVisible(hWnd)) return true;
+            int titleLength = GetWindowTextLength(hWnd);
+            if (titleLength == 0) return true;
+
+            var title = new StringBuilder(titleLength + 1);
+            var className = new StringBuilder(256);
+            GetWindowText(hWnd, title, title.Capacity);
+            GetClassName(hWnd, className, className.Capacity);
+            uint processId;
+            GetWindowThreadProcessId(hWnd, out processId);
+            records.Add(new KakaoWindowRecord {
+                Handle = hWnd.ToInt64(),
+                ProcessId = (int)processId,
+                Title = title.ToString(),
+                ClassName = className.ToString()
+            });
+            return true;
+        }, IntPtr.Zero);
+        return records.ToArray();
+    }
+}
+'@
+
+$kakaoProcessIds = @(Get-Process KakaoTalk -ErrorAction Stop | ForEach-Object { $_.Id })
+$visibleWindows = @([KakaoWindowReader]::VisibleTopLevelWindows())
+$mainHandles = @($visibleWindows | Where-Object {
+    $kakaoProcessIds -contains $_.ProcessId -and $_.Title -eq '카카오톡'
+} | ForEach-Object { $_.Handle })
+$chatWindows = @($visibleWindows | Where-Object {
+    $kakaoProcessIds -contains $_.ProcessId -and
+    $_.ClassName -eq 'EVA_Window_Dblclk' -and
+    $_.Handle -notin $mainHandles
+})
+$matches = @($chatWindows | Where-Object { $_.Title -eq $target })
+if ($matches.Count -eq 0) { @{status='missing'} | ConvertTo-Json -Compress; exit 0 }
+if ($matches.Count -ne 1) { @{status='ambiguous'} | ConvertTo-Json -Compress; exit 0 }
+$window = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]([Int64]$matches[0].Handle))
+$textNodes = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+$lines = @($textNodes | ForEach-Object { if ($_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Text -and $_.Current.Name) { $_.Current.Name } } | Select-Object -Unique)
+if ($lines.Count -eq 0) { @{status='empty'} | ConvertTo-Json -Compress; exit 0 }
+@{status='ok'; text=($lines -join [Environment]::NewLine); captured_at=[DateTime]::UtcNow.ToString('o')} | ConvertTo-Json -Compress
 """.strip()
+        )
         return ["powershell", "-NoProfile", "-NonInteractive", "-Command", script]
 
     async def read(self, _alias, target):

@@ -139,6 +139,20 @@ def test_windows_reader_refuses_an_ambiguous_window_match_without_copying():
         run(backend.read("업무", "프로젝트"))
 
 
+def test_windows_reader_enumerates_visible_chat_windows_not_process_main_windows():
+    command = "\n".join(WindowsUiBackend.command("프로젝트 방"))
+
+    assert "EnumWindows" in command
+    assert "GetWindowThreadProcessId" in command
+    assert "EVA_Window_Dblclk" in command
+    assert "MainWindowHandle" not in command
+    assert "-notin $mainHandles" in command
+    assert "SetForegroundWindow" not in command
+    assert "Clipboard" not in command
+    assert "SendKeys" not in command
+    assert "keybd_event" not in command
+
+
 def test_windows_reader_returns_only_text_from_the_exact_visible_window():
     backend = WindowsUiBackend(
         runner=lambda *_args, **_kwargs: subprocess.CompletedProcess(
