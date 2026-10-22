@@ -98,11 +98,16 @@ uv run kakao-agent read 업무
 
 ## Codex, Claude, Hermes 연결
 
-각 도구의 MCP 설정에 아래 로컬 명령을 등록합니다.
+각 도구의 MCP 설정에는 `kakao-agent`라는 로컬 명령을 등록합니다. 처음 한 번만 프로젝트 폴더에서 아래 명령을 실행하면, 이후 어느 폴더에서도 같은 명령을 사용할 수 있습니다.
 
 ```bash
-uv run kakao-agent serve
+uv tool install .
+kakao-agent --help
 ```
+
+`kakao-agent --help`가 보이면 설치 완료입니다. 찾지 못한다면 새 터미널을 열고 다시 확인합니다. 계속 찾지 못할 때만 `uv tool update-shell`을 실행한 뒤 새 터미널을 엽니다.
+
+MCP 설정 화면에서 명령은 `kakao-agent`, 인수는 `serve`로 입력합니다. 하나의 명령 칸만 있는 앱은 `kakao-agent serve`를 입력합니다.
 
 MCP 도구는 두 개뿐입니다.
 
