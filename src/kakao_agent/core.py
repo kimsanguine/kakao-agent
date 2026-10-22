@@ -24,7 +24,7 @@ def minimize(text):
 class Settings:
     rooms: dict
     max_chars: int = 100_000
-    mac_account_id: int | None = None
+    mac_account_ids: tuple = ()
 
     def __post_init__(self):
         if not isinstance(self.rooms, dict) or any(
@@ -39,10 +39,11 @@ class Settings:
             )
         if type(self.max_chars) is not int or not 1 <= self.max_chars <= 300_000:
             raise ValueError("max_chars는 1~300000 정수여야 합니다.")
-        if self.mac_account_id is not None and (
-            type(self.mac_account_id) is not int or self.mac_account_id < 0
+        if not isinstance(self.mac_account_ids, tuple) or any(
+            type(account_id) is not int or account_id < 0
+            for account_id in self.mac_account_ids
         ):
-            raise ValueError("mac_account_id는 0 이상의 정수여야 합니다.")
+            raise ValueError("mac_account_ids는 0 이상의 정수 목록이어야 합니다.")
 
 
 class Service:

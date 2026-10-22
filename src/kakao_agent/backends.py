@@ -22,10 +22,10 @@ class MacDatabaseBackend:
         "DENYFILEEXTIONSIONREVISION:",
     )
 
-    def __init__(self, runner=subprocess.run, *, container_root=None, account_id=None):
+    def __init__(self, runner=subprocess.run, *, container_root=None, account_ids=()):
         self.runner = runner
         self.container_root = Path(container_root or self._default_container_root())
-        self.account_id = account_id
+        self.account_ids = tuple(account_ids)
 
     @staticmethod
     def _default_container_root():
@@ -112,14 +112,20 @@ class MacDatabaseBackend:
         return found
 
     def recover_account_id(self, upper_bound=1_000_000):
+        return self.recover_account_ids(upper_bound)[0]
+
+    def recover_account_ids(self, upper_bound=1_000_000):
         """로컬 해시와 일치하는 계정 번호를 제한된 범위에서 찾는다."""
         hashes = self.account_hashes()
         if not hashes:
             raise CollectionError("로컬 계정 표식을 찾지 못했습니다.")
+        found = []
         for account_id in range(upper_bound + 1):
             candidate = hashlib.sha512(str(account_id).encode()).hexdigest()
             if candidate in hashes:
-                return account_id
+                found.append(account_id)
+        if found:
+            return found
         raise CollectionError(
             "로컬 계정 번호를 확인하지 못했습니다. 별도 준비 명령으로 다시 시도하세요."
         )
@@ -257,56 +263,78 @@ class MacDatabaseBackend:
                 "카카오톡 로컬 DB를 읽기 전용으로 열지 못했습니다."
             ) from None
 
+    def prepare(self, upper_bound=1_000_000):
+        """원문을 읽지 않고, 실제 읽기 전용 DB 개방 가능 여부만 확인한다."""
+        account_ids = self.recover_account_ids(upper_bound)
+        device_uuid = self.device_uuid()
+        paths = self.candidates()
+        for account_id in account_ids:
+            key = self.derive_key(device_uuid, account_id)
+            for path in paths:
+                try:
+                    connection = self._connect(path, key)
+                except CollectionError:
+                    continue
+                connection.close()
+                self.account_ids = tuple(account_ids)
+                return self.account_ids
+        raise CollectionError(
+            "Mac 로컬 DB 읽기 준비를 확인하지 못했습니다. "
+            "카카오톡을 최신 상태로 연 뒤 다시 시도하세요."
+        )
+
     async def read(self, _alias, target):
         if not str(target).isdigit():
             raise CollectionError("Mac에서는 방을 숫자 식별값으로 연결해야 합니다.")
-        account_id = self.account_id
-        if account_id is None:
-            account_id = self.recover_account_id()
-        key = self.derive_key(self.device_uuid(), account_id)
-        for path in self.candidates():
-            try:
-                connection = self._connect(path, key)
-            except CollectionError:
-                continue
-            try:
-                messages = self._message_query(connection, target)
-            except CollectionError:
+        account_ids = self.account_ids or tuple(self.recover_account_ids())
+        device_uuid = self.device_uuid()
+        for account_id in account_ids:
+            key = self.derive_key(device_uuid, account_id)
+            for path in self.candidates():
+                try:
+                    connection = self._connect(path, key)
+                except CollectionError:
+                    continue
+                try:
+                    messages = self._message_query(connection, target)
+                except CollectionError:
+                    connection.close()
+                    continue
                 connection.close()
-                continue
-            connection.close()
-            text = "\n".join(str(message) for _, message in messages if message)
-            if text:
-                return {
-                    "text": text,
-                    "captured_at": datetime.now(timezone.utc).isoformat(),
-                    "source": self.kind,
-                    "coverage": "local-database",
-                    "room_verified": True,
-                }
+                text = "\n".join(str(message) for _, message in messages if message)
+                if text:
+                    return {
+                        "text": text,
+                        "captured_at": datetime.now(timezone.utc).isoformat(),
+                        "source": self.kind,
+                        "coverage": "local-database",
+                        "room_verified": True,
+                    }
         raise CollectionError("선택한 방의 로컬 기록을 읽지 못했습니다.")
 
     def discover_rooms(self):
         """설정 전용 CLI에서만 방 ID와 제목을 확인한다. MCP에는 노출하지 않는다."""
-        account_id = self.account_id
-        if account_id is None:
+        account_ids = self.account_ids
+        if not account_ids:
             raise CollectionError("먼저 prepare로 Mac 로컬 DB 읽기를 준비하세요.")
-        key = self.derive_key(self.device_uuid(), account_id)
-        for path in self.candidates():
-            try:
-                connection = self._connect(path, key)
-            except CollectionError:
-                continue
-            try:
-                rooms = self._room_query(connection)
-            except CollectionError:
+        device_uuid = self.device_uuid()
+        for account_id in account_ids:
+            key = self.derive_key(device_uuid, account_id)
+            for path in self.candidates():
+                try:
+                    connection = self._connect(path, key)
+                except CollectionError:
+                    continue
+                try:
+                    rooms = self._room_query(connection)
+                except CollectionError:
+                    connection.close()
+                    continue
                 connection.close()
-                continue
-            connection.close()
-            return [
-                {"target": str(room_id), "title": str(title)}
-                for room_id, title in rooms
-            ]
+                return [
+                    {"target": str(room_id), "title": str(title)}
+                    for room_id, title in rooms
+                ]
         raise CollectionError("연결할 카카오톡 방 목록을 읽지 못했습니다.")
 
 
@@ -379,7 +407,7 @@ def create_backend(system=None, **kwargs):
     if selected == "Darwin":
         return MacDatabaseBackend(**kwargs)
     if selected == "Windows":
-        kwargs.pop("account_id", None)
+        kwargs.pop("account_ids", None)
         return WindowsUiBackend(**kwargs)
     raise CollectionError(
         "macOS 또는 Windows에서만 카카오톡 로컬 기록을 읽을 수 있습니다."

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .backends import create_backend
 from .config import default_path, initial, load, save
-from .core import Service
+from .core import CollectionError, Service
 
 
 def configure_stdio():
@@ -56,12 +56,12 @@ def main():
             save(args.config, raw)
             print("허용 방을 추가했습니다.")
             return
-        backend = create_backend(account_id=settings.mac_account_id)
+        backend = create_backend(account_ids=settings.mac_account_ids)
         if args.action == "prepare":
             if backend.kind != "macos-local-db":
                 raise ValueError("Mac에서만 로컬 DB 준비를 실행할 수 있습니다.")
-            account_id = backend.recover_account_id(args.account_upper_bound)
-            raw["mac_account_id"] = account_id
+            account_ids = backend.prepare(args.account_upper_bound)
+            raw["mac_account_ids"] = list(account_ids)
             save(args.config, raw)
             print(
                 "Mac 로컬 DB 읽기 준비를 저장했습니다. 계정 식별값은 출력하지 않습니다."
@@ -94,6 +94,9 @@ def main():
         else:
             result = asyncio.run(service.read(args.room))
         print(json.dumps(result, ensure_ascii=False, indent=2))
+    except CollectionError as error:
+        print(f"실패: {error}", file=sys.stderr)
+        raise SystemExit(1)
     except (OSError, ValueError, KeyError, TypeError):
         print(
             "실패: 설정, 허용 방 또는 로컬 카카오톡 상태를 확인하세요. 원문 오류는 출력하지 않습니다.",

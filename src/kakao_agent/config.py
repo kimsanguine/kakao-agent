@@ -28,13 +28,15 @@ def load(path):
         "mode",
         "rooms",
         "max_chars",
-        "mac_account_id",
+        "mac_account_ids",
     }:
         raise ValueError("알 수 없는 설정 항목입니다.")
     if raw.get("mode") != "native":
         raise ValueError("지원하지 않는 입력 방식입니다.")
     return raw, Settings(
-        raw["rooms"], raw.get("max_chars", 100_000), raw.get("mac_account_id")
+        raw["rooms"],
+        raw.get("max_chars", 100_000),
+        tuple(raw.get("mac_account_ids", [])),
     )
 
 
