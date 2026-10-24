@@ -28,6 +28,8 @@ def main():
     allow.add_argument(
         "--target", required=True, help="Mac은 방 숫자 ID, Windows는 열린 창 이름"
     )
+    remove = subs.add_parser("remove", help="로컬 허용 목록에서 방 별칭 제거")
+    remove.add_argument("alias")
     subs.add_parser("rooms")
     subs.add_parser(
         "discover", help="Mac에서만 로컬 방 ID와 제목을 확인. MCP에는 노출하지 않음"
@@ -53,6 +55,19 @@ def main():
             save(args.config, raw)
             print("허용 방을 추가했습니다.")
             return
+        if args.action == "remove":
+            if args.alias not in raw["rooms"]:
+                raise ValueError("허용 목록에 없는 별칭입니다.")
+            del raw["rooms"][args.alias]
+            save(args.config, raw)
+            print("허용 방을 제거했습니다.")
+            return
+        if args.action == "serve":
+            from .server import create_server
+
+            create_server(args.config).run()
+            return
+
         backend = create_backend(account_ids=settings.mac_account_ids)
         if args.action == "prepare":
             if backend.kind != "macos-local-db":
@@ -72,11 +87,6 @@ def main():
                     {"rooms": backend.discover_rooms()}, ensure_ascii=False, indent=2
                 )
             )
-            return
-        if args.action == "serve":
-            from .server import create_server
-
-            create_server(settings, backend).run()
             return
         service = Service(settings, backend)
         if args.action == "rooms":

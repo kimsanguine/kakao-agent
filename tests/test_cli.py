@@ -34,6 +34,18 @@ def test_allow_keeps_private_target_only_in_local_config(tmp_path):
     assert command(config, "allow", "업무", "--target", "12345").returncode != 0
 
 
+def test_remove_revokes_an_allowed_room_without_starting_a_backend(tmp_path):
+    config = tmp_path / "settings.json"
+    command(config, "init")
+    command(config, "allow", "업무", "--target", "12345")
+
+    result = command(config, "remove", "업무")
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(config.read_text(encoding="utf-8"))["rooms"] == {}
+    assert command(config, "remove", "업무").returncode != 0
+
+
 def test_cli_missing_config_errors_without_fake_success(tmp_path):
     result = command(tmp_path / "missing.json", "rooms")
     assert result.returncode != 0
